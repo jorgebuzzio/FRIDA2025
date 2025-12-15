@@ -58,7 +58,7 @@ After these 7 steps, wait a few seconds and you will see how the Syn Flood attac
 ## Used topology
 The topology used for this evaluation is the same displayed for the QCMP paper. In our case, the topology is configured with static routing, which is defined in the runtime files located at the pod\_topo subfolder:
 
-<img src="./images/topology.pdf" width = "500"  align= left/>
+<img src="./images/topology.png" width = "500"  align= left/>
 
 In this preliminary version, the RL agent only operates in the S1 switch.
 
