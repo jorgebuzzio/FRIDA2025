@@ -1,0 +1,220 @@
+pkg_info {
+  arch: "v1model"
+}
+tables {
+  preamble {
+    id: 34622576
+    name: "IngressPipeImpl.ipv4_forward"
+    alias: "ipv4_forward"
+  }
+  match_fields {
+    id: 1
+    name: "standard_metadata.ingress_port"
+    bitwidth: 9
+    match_type: EXACT
+  }
+  action_refs {
+    id: 24677122
+  }
+  action_refs {
+    id: 28396054
+    annotations: "@defaultonly"
+    scope: DEFAULT_ONLY
+  }
+  const_default_action_id: 28396054
+  direct_resource_ids: 323495002
+  size: 1024
+}
+actions {
+  preamble {
+    id: 28396054
+    name: "IngressPipeImpl.drop"
+    alias: "drop"
+  }
+}
+actions {
+  preamble {
+    id: 24677122
+    name: "IngressPipeImpl.set_egress_port"
+    alias: "set_egress_port"
+  }
+  params {
+    id: 1
+    name: "port_num"
+    bitwidth: 9
+  }
+}
+actions {
+  preamble {
+    id: 32218902
+    name: "IngressPipeImpl.TotalFwdPackets"
+    alias: "TotalFwdPackets"
+  }
+}
+actions {
+  preamble {
+    id: 23488467
+    name: "IngressPipeImpl.MaxPacketLength"
+    alias: "MaxPacketLength"
+  }
+}
+actions {
+  preamble {
+    id: 32264411
+    name: "IngressPipeImpl.InterArrivalTime"
+    alias: "InterArrivalTime"
+  }
+}
+actions {
+  preamble {
+    id: 19939317
+    name: "IngressPipeImpl.Max_InterArrivalTime"
+    alias: "Max_InterArrivalTime"
+  }
+}
+actions {
+  preamble {
+    id: 28673995
+    name: "IngressPipeImpl.Min_InterArrivalTime"
+    alias: "Min_InterArrivalTime"
+  }
+}
+actions {
+  preamble {
+    id: 29451622
+    name: "IngressPipeImpl.calculate_hash"
+    alias: "calculate_hash"
+  }
+}
+actions {
+  preamble {
+    id: 27737956
+    name: "IngressPipeImpl.quantization_8bit"
+    alias: "quantization_8bit"
+  }
+}
+actions {
+  preamble {
+    id: 30992624
+    name: "IngressPipeImpl.perceptron"
+    alias: "perceptron"
+  }
+}
+direct_counters {
+  preamble {
+    id: 323495002
+    name: "ipv4_forward_counter"
+    alias: "ipv4_forward_counter"
+  }
+  spec {
+    unit: BOTH
+  }
+  direct_table_id: 34622576
+}
+registers {
+  preamble {
+    id: 375501810
+    name: "last_timestamp"
+    alias: "last_timestamp"
+  }
+  type_spec {
+    bitstring {
+      bit {
+        bitwidth: 32
+      }
+    }
+  }
+  size: 128
+}
+registers {
+  preamble {
+    id: 377743055
+    name: "time_diff"
+    alias: "time_diff"
+  }
+  type_spec {
+    bitstring {
+      bit {
+        bitwidth: 32
+      }
+    }
+  }
+  size: 128
+}
+registers {
+  preamble {
+    id: 384672149
+    name: "max_packet_length"
+    alias: "max_packet_length"
+  }
+  type_spec {
+    bitstring {
+      bit {
+        bitwidth: 32
+      }
+    }
+  }
+  size: 128
+}
+registers {
+  preamble {
+    id: 373248151
+    name: "maximum_flow_iat"
+    alias: "maximum_flow_iat"
+  }
+  type_spec {
+    bitstring {
+      bit {
+        bitwidth: 32
+      }
+    }
+  }
+  size: 128
+}
+registers {
+  preamble {
+    id: 374856557
+    name: "minimum_flow_iat"
+    alias: "minimum_flow_iat"
+  }
+  type_spec {
+    bitstring {
+      bit {
+        bitwidth: 32
+      }
+    }
+  }
+  size: 128
+}
+registers {
+  preamble {
+    id: 380796224
+    name: "packet_counter"
+    alias: "packet_counter"
+  }
+  type_spec {
+    bitstring {
+      bit {
+        bitwidth: 32
+      }
+    }
+  }
+  size: 128
+}
+registers {
+  preamble {
+    id: 372237607
+    name: "resultados"
+    alias: "resultados"
+  }
+  type_spec {
+    bitstring {
+      bit {
+        bitwidth: 1
+      }
+    }
+  }
+  size: 128
+}
+type_info {
+}
