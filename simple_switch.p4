@@ -1,1 +1,459 @@
+#include <core.p4>
+#include <v1model.p4>
+
+// Description taken from NGSDN-TUTORIAL
+// CPU_PORT specifies the P4 port number associated to controller packet-in and
+// packet-out. All packets forwarded via this port will be delivered to the
+// controller as P4Runtime PacketIn messages. Similarly, PacketOut messages from
+// the controller will be seen by the P4 pipeline as coming from the CPU_PORT.
+#define CPU_PORT 255
+
+// Description taken from NGSDN-TUTORIAL
+// CPU_CLONE_SESSION_ID specifies the mirroring session for packets to be cloned
+// to the CPU port. Packets associated with this session ID will be cloned to
+// the CPU_PORT as well as being transmitted via their egress port (set by the
+// bridging/routing/acl table). For cloning to work, the P4Runtime controller
+// needs first to insert a CloneSessionEntry that maps this session ID to the
+// CPU_PORT.
+#define CPU_CLONE_SESSION_ID 99
+
+// Type aliases defined for convenience
+typedef bit<9>   port_num_t;
+typedef bit<48>  mac_addr_t;
+typedef bit<32>  ipv4_addr_t;
+typedef bit<16>  l4_port_t;
+
+const bit<16> ETHERTYPE_IPV4 = 0x0800;
+const bit<16> ETHERTYPE_ARP = 0x0806;
+const bit<8> IPV4_ICMP = (bit<8>)1;
+const bit<8> IPV4_TCP=(bit<8>)6;
+const bit<8> IPV4_UDP=(bit<8>)17;
+const bit<8> FLAG=(bit<8>)1;
+
+const bit<32> TOT_FWD_PKTS = (bit<32>)8;//              76;
+const bit<32> PKT_LEN_MIN=(bit<32>)6;//                 55;
+const bit<32> FWD_PKT_LEN_MAX=(bit<32>)46;//             458;
+const bit<32> FWD_IAT_MAX=(bit<32>)910128;//                 9101282;
+const bit<32> FWD_IAT_MIN=(bit<32>)258815;//                 2588147;
+
+#define NumFlows 100
+
+//------------------------------------------------------------------------------
+// REGISTERS
+//------------------------------------------------------------------------------
+register<bit<32>>(128) last_timestamp;
+//register<bit<32>>(128) time_diff;
+
+register<bit<32>>(128) fwd_pkt_len_max;
+register<bit<32>>(128) pkt_len_min;
+register<bit<32>>(128) fwd_iat_max;
+register<bit<32>>(128) fwd_iat_min;
+register<bit<32>>(128) tot_fwd_pkts;
+register<bit<8>>(4) conf_matrix;
+
+//------------------------------------------------------------------------------
+// HEADER DEFINITIONS
+//------------------------------------------------------------------------------
+
+header ethernet_t {
+	mac_addr_t dst_addr;
+	mac_addr_t src_addr;
+	bit<16>    ether_type;
+}
+
+header arp_t {
+    bit<16>     h_type;
+    bit<16>     p_type;
+    bit<8>      h_len;
+    bit<8>      p_len;
+    bit<16>     op_code;
+    mac_addr_t  src_mac;
+    bit<32>     src_ip;
+    mac_addr_t  dst_mac;
+    bit<32>     dst_ip;
+}
+
+header ipv4_t {
+    bit<4>  version;
+    bit<4>  ihl;
+    bit<8>  tos;
+    bit<16> totalLen;
+    bit<16> identification;
+    bit<3>  flags;
+    bit<13> fragOffset;
+    bit<8>  ttl;
+    bit<8>  protocol;
+    bit<16> hdrChecksum;
+    bit<32> src_addr;
+    bit<32> dst_addr;
+}
+
+header tcp_t {
+    bit<16> src_port;
+    bit<16> dst_port;
+    bit<32> seq_no;
+    bit<32> ack_no;
+    bit<4>  data_offset;
+    bit<3>  res;
+    bit<3>  ecn;
+    bit<1>  urg;
+    bit<1>  ack;
+    bit<1>  psh;
+    bit<1>  rst;
+    bit<1>  syn;
+    bit<1>  fin;
+    bit<16> window;
+    bit<16> checksum;
+    bit<16> urgent_ptr;
+}
+
+header udp_t {
+    bit<16> src_port;
+    bit<16> dst_port;
+    bit<16> length_;
+    bit<16> checksum;
+}
+
+struct parsed_headers_t {
+    ethernet_t  ethernet;
+    ipv4_t      ipv4;
+    tcp_t       tcp;
+    udp_t       udp;
+}
+
+struct local_metadata_t {
+    @field_list(1)
+    port_num_t  ingress_port;
+    bit<32> timediff;
+    bit<32> pkts;
+    bit<32> max_iat;
+    bit<32> min_iat;
+    bit<32> pkt_min;
+    bit<32> fwd_pkt_max;
+    bit<32> result;
+
+}
+
+//------------------------------------------------------------------------------
+// INGRESS PIPELINE
+//------------------------------------------------------------------------------
+
+parser ParserImpl (packet_in packet,
+                   out parsed_headers_t hdr,
+                   inout local_metadata_t local_metadata,
+                   inout standard_metadata_t standard_metadata)
+    {
+    state start {
+        local_metadata.ingress_port = standard_metadata.ingress_port;
+        transition select(standard_metadata.ingress_port) {
+            default: parseEthernet;
+        }
+    }
+
+    state parseEthernet {
+        packet.extract(hdr.ethernet);
+        transition select(hdr.ethernet.ether_type){
+	    0x0800: parse_ipv4;
+        default: accept;
+        }
+    }
+
+    state parse_ipv4 {
+        packet.extract(hdr.ipv4);
+        transition select(hdr.ipv4.protocol) {
+	    IPV4_TCP: parse_tcp;
+        IPV4_UDP: parse_udp;
+            default: accept;
+        }
+    }
+
+    state parse_tcp {
+	    packet.extract(hdr.tcp);
+	    transition accept;
+    }
+
+    state parse_udp {
+	    packet.extract(hdr.udp);
+	    transition accept;
+    }
+
+}
+
+
+control VerifyChecksumImpl(inout parsed_headers_t hdr,
+                           inout local_metadata_t meta){
+    // Description taken from NGSDN-TUTORIAL
+    // Not used here. We assume all packets have valid checksum, if not, we let
+    // the end hosts detect errors.
+    apply { /* EMPTY */ }
+}
+
+control IngressPipeImpl (inout parsed_headers_t    hdr,
+                         inout local_metadata_t    local_metadata,
+                         inout standard_metadata_t standard_metadata) {
+
+    // Drop action shared by many tables.
+    action drop() {
+        mark_to_drop(standard_metadata);
+    }
+
+    action set_egress_port(port_num_t port_num) {
+        standard_metadata.egress_spec = port_num;
+    }
+
+    action ConfusionMatrix(bit<32> id) {
+        bit<8> current;  
+        conf_matrix.read(current, id);
+        conf_matrix.write(id, current + 1);
+    }  
+
+    action TotalFwdPackets(bit<32> flow_id) {
+        //bit<32> current;
+        tot_fwd_pkts.read(local_metadata.pkts, flow_id);
+        tot_fwd_pkts.write(flow_id, local_metadata.pkts+1);
+        local_metadata.pkts = local_metadata.pkts+1;
+    }
+
+    action FwdPacketLengthMax(bit<32> flow_id) {
+        //bit<32> current;
+        fwd_pkt_len_max.read(local_metadata.fwd_pkt_max, flow_id);
+        if ((bit<32>)standard_metadata.packet_length > local_metadata.fwd_pkt_max){
+            local_metadata.fwd_pkt_max = standard_metadata.packet_length;
+        }
+        fwd_pkt_len_max.write(flow_id, local_metadata.fwd_pkt_max);
+    }
+
+    action PacketLengthMin(bit<32> flow_id) {
+        //bit<32> current;
+        pkt_len_min.read(local_metadata.pkt_min, flow_id);
+        if ((bit<32>)standard_metadata.packet_length < local_metadata.pkt_min){
+            local_metadata.pkt_min = standard_metadata.packet_length;
+        }
+        pkt_len_min.write(flow_id, local_metadata.pkt_min);
+    }
+
+    action InterArrivalTime(bit<32> flow_id) {
+        bit<32> prev_time;
+        bit<32> curr_time;
+        //bit<32> diff;
+
+        curr_time = (bit<32>)standard_metadata.ingress_global_timestamp;
+        last_timestamp.read(prev_time, flow_id);
+
+        local_metadata.timediff = curr_time - prev_time;
+        last_timestamp.write(flow_id, curr_time);
+    }
+
+    action Max_InterArrivalTime(bit<32> flow_id) {
+
+        fwd_iat_max.read(local_metadata.max_iat, flow_id);
+
+        if (local_metadata.timediff > local_metadata.max_iat){
+            local_metadata.max_iat = local_metadata.timediff;
+        }
+        fwd_iat_max.write(flow_id, local_metadata.max_iat);
+    }
+
+    action Min_InterArrivalTime(bit<32> flow_id) {
+
+        fwd_iat_min.read(local_metadata.min_iat, flow_id);
+
+        if (local_metadata.timediff < local_metadata.min_iat){
+            local_metadata.min_iat = local_metadata.timediff;
+        }
+        fwd_iat_min.write(flow_id, local_metadata.min_iat);
+    }
+
+    action calculate_hash(out bit<32> flow_id){
+        hash(
+        flow_id, 
+        HashAlgorithm.crc32, 
+        (bit<32>) 0,
+        {hdr.ipv4.src_addr, hdr.ipv4.dst_addr, hdr.ipv4.protocol, hdr.tcp.src_port, hdr.tcp.dst_port}, 
+        (bit<32>) NumFlows -1
+        );
+    }
+
+    action quantization_8bit(in bit<32> feature, in bit<32> divisor, out bit<8> quantized) {
+        bit<32> dividend = feature;
+        bit<8> div=0;
+        //dividend = (dividend << 3) + (dividend<<1) + (divisor>>1);
+  
+        if ((divisor << 7) <= dividend) {dividend = dividend - (divisor << 7); div = div | (bit<8>)(1 << 7);}
+        if ((divisor << 6) <= dividend) {dividend = dividend - (divisor << 6); div = div | (bit<8>)(1 << 6);}
+        if ((divisor << 5) <= dividend) {dividend = dividend - (divisor << 5); div = div | (bit<8>)(1 << 5);}
+        if ((divisor << 4) <= dividend) {dividend = dividend - (divisor << 4); div = div | (bit<8>)(1 << 4);}
+        if ((divisor << 3) <= dividend) {dividend = dividend - (divisor << 3); div = div | (bit<8>)(1 << 3);}
+        if ((divisor << 2) <= dividend) {dividend = dividend - (divisor << 2); div = div | (bit<8>)(1 << 2);}
+        if ((divisor << 1) <= dividend) {dividend = dividend - (divisor << 1); div = div | (bit<8>)(1 << 1);}
+        if (divisor <= dividend) { div = div | (bit<8>)1;}
+
+        quantized = div;
+    }
+
+    table ipv4_forward {
+        key = {
+            standard_metadata.ingress_port: exact;
+            //hdr.ipv4.dst_addr: exact;
+        }
+        actions = {
+            set_egress_port;
+            @defaultonly drop;
+        }
+        const default_action = drop;
+        // The @name annotation is used here to provide a name to this table
+        // counter, as it will be needed by the compiler to generate the
+        // corresponding P4Info entity.
+        @name("ipv4_forward_counter")
+        counters = direct_counter(CounterType.packets_and_bytes);
+    }
+
+    table tcp_forward {
+        key = {
+            hdr.tcp.dst_port: exact;
+        }
+        actions = {
+            set_egress_port;
+            @defaultonly drop;
+        }
+        const default_action = drop;
+    }
+
+    apply {
+
+        if (hdr.ethernet.isValid() && hdr.ethernet.ether_type == ETHERTYPE_IPV4 && hdr.ipv4.isValid()){
+            if (hdr.tcp.isValid() || hdr.udp.isValid()){
+                bit<32> flow_id;
+                bit<16> sum1 = 0;
+                bit<16> sum2 = 0;
+                //bit<1> sum;
+                bit<8> x1;
+                bit<8> x2;
+                bit<8> x3;
+                bit<8> x4;
+                bit<8> x5;
+
+                calculate_hash(flow_id); //Calculate the hash to identify a flow
+
+                //FEATURE 2: Total Fwd Packets
+                TotalFwdPackets(flow_id);
+
+                //IAT
+                InterArrivalTime(flow_id);
+                
+                //FEATURE 3: Fwd Packet Length Max
+                FwdPacketLengthMax(flow_id);
+
+                //FEATURE 4: Packet Length Min
+                if (local_metadata.pkts == 1){
+                    pkt_len_min.write(flow_id,local_metadata.fwd_pkt_max);
+                }
+
+                PacketLengthMin(flow_id);
+
+                //pkt_len_min.read(pkt_min, flow_id);
+                
+                if (local_metadata.pkts == 2){
+                    //FEATURE 1 : Fwd IAT Max
+                    Max_InterArrivalTime(flow_id);
+
+                    //FEATURE 5: Fwd IAT Min
+                    fwd_iat_min.write(flow_id, local_metadata.max_iat);
+                }
+                
+                if(local_metadata.pkts >2){
+                    //FEATURE 1 : Fwd IAT Max
+                    Max_InterArrivalTime(flow_id);
+
+                    //FEATURE 5: Fwd IAT Min
+                    Min_InterArrivalTime(flow_id);
+                }
+
+                if (hdr.ipv4.tos!=0x00){
+                    //QUANTIZATION OF ALL THE FEATURES
+                    quantization_8bit((local_metadata.pkts-1), TOT_FWD_PKTS, x1);/////REVISAR
+                    quantization_8bit((local_metadata.pkt_min-60), PKT_LEN_MIN, x2); /////REVISAR
+                    quantization_8bit((local_metadata.fwd_pkt_max-60), FWD_PKT_LEN_MAX, x3);  /////REVISAR
+                    quantization_8bit(local_metadata.max_iat, FWD_IAT_MAX, x4);
+                    quantization_8bit(local_metadata.min_iat, FWD_IAT_MIN, x5);
+
+
+                    // tos= 0x01 Normal Actual
+                    // tos= 0x03 Attack Actual
+                    // result = 1 Normal Predicted
+                    // result = 0 Attack Predicted
+                    // tos= 0x10 && v1>v2    TP      ConfusionMatrix(0)
+                    // tos= 0x01 && v1>v2    FP      ConfusionMatrix(2)
+                    // tos= 0x10 && v1<v2    FN      ConfusionMatrix(1)
+                    // tos= 0x01 && v1<v2    TN      ConfusionMatrix(3)
+                    
+                    //r = (sum1-sum2)[15:15];
+                    sum1 = ((bit<16>)x1<<5) + ((bit<16>)x1<<3)+((bit<16>)x1<<1)+((bit<16>)x1) + 274;
+                    sum2 = ((bit<16>)x2<<7) - ((bit<16>)x2)+((bit<16>)x3<<7) - ((bit<16>)x3<<3) - ((bit<16>)x3<<2) - ((bit<16>)x3)+((bit<16>)x4<<5) + ((bit<16>)x4<<1)+((bit<16>)x5<<5) + ((bit<16>)x5<<1) + ((bit<16>)x5);
+        
+                }
+                
+                if (hdr.ipv4.tos==0x10){
+                    
+                    if (sum1>sum2){
+                        ConfusionMatrix(0);
+                    }else{
+                        ConfusionMatrix(1);
+                    }
+                }
+
+                if (hdr.ipv4.tos==0x01){
+                   
+                    if (sum1>sum2){
+                        ConfusionMatrix(2);
+                    }else{
+                        ConfusionMatrix(3);
+                    }
+                }
+                
+
+                ipv4_forward.apply();
+            }
+        }
+    }
+}
+
+
+control EgressPipeImpl (inout parsed_headers_t hdr,
+                        inout local_metadata_t local_metadata,
+                        inout standard_metadata_t standard_metadata) {
+    apply {
+
+
+    }
+}
+
+
+control ComputeChecksumImpl(inout parsed_headers_t hdr,
+                            inout local_metadata_t local_metadata)
+{
+    apply {
+    }
+}
+
+
+control DeparserImpl(packet_out packet, in parsed_headers_t hdr) {
+    apply {
+	packet.emit(hdr.ethernet);
+    packet.emit(hdr.ipv4);
+    packet.emit(hdr.tcp);
+    packet.emit(hdr.udp);
+    }
+}
+
+
+V1Switch(
+    ParserImpl(),
+    VerifyChecksumImpl(),
+    IngressPipeImpl(),
+    EgressPipeImpl(),
+    ComputeChecksumImpl(),
+    DeparserImpl()
+) main;
+
  
